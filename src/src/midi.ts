@@ -166,6 +166,5 @@ export async function audioToMidi(
     });
   }
 
-  const arr = midi.toArray();
-  return new Blob([new Uint8Array(arr)], { type: "audio/midi" });
+  return new Blob([midi.toArray()], { type: "audio/midi" });
 }

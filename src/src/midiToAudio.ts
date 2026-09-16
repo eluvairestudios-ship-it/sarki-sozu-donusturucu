@@ -81,7 +81,7 @@ export async function midiToWav(
   }, duration);
 
   onProgress?.(85);
-  const wav = audioBufferToWav(audioBuffer.get() as AudioBuffer);
+  const wav = audioBufferToWav(audioBuffer);
   onProgress?.(100);
   return wav;
 }

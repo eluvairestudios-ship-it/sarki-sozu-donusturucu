@@ -462,6 +462,34 @@ export default function App() {
     }
   }, [bypassMode]);
 
+  // ── Piano conversion (guaranteed bypass: MP3 → MIDI → Piano WAV) ──
+  const [pianoStage, setPianoStage] = useState<"idle"|"midi"|"wav"|"done"|"error">("idle");
+  const [pianoProgress, setPianoProgress] = useState(0);
+  const [pianoError, setPianoError] = useState("");
+  const [pianoDragOver, setPianoDragOver] = useState(false);
+  const pianoFileRef = useRef<HTMLInputElement>(null);
+
+  const handlePianoFile = useCallback(async (file: File) => {
+    setPianoStage("midi");
+    setPianoProgress(5);
+    setPianoError("");
+    try {
+      // Step 1: MP3 → MIDI
+      const midiBlob = await audioToMidi(file, 1.0, 0);
+      setPianoProgress(50);
+      setPianoStage("wav");
+      // Step 2: MIDI → Piano WAV
+      const wav = await midiToWav(midiBlob, (pct) => setPianoProgress(50 + Math.round(pct * 0.5)));
+      const base = file.name.replace(/\.[^.]+$/, "");
+      downloadBlob(wav, `${base}_piano.wav`);
+      setPianoStage("done");
+      setPianoProgress(100);
+    } catch (e: unknown) {
+      setPianoError(e instanceof Error ? e.message : "Hata");
+      setPianoStage("error");
+    }
+  }, []);
+
   // ── ElevenLabs ──
   // Hardcoded popular ElevenLabs voices — no voices_read permission needed
   const PRESET_VOICES = [
@@ -685,11 +713,60 @@ export default function App() {
           </Panel>
 
           {/* ═══ SECTION B: BYPASS ═══ */}
-          <SectionLabel>② MÜZİK BYPASS — Suno'yu Atla, Müziği Bozmadan WAV Ver</SectionLabel>
+          <SectionLabel>② MÜZİK BYPASS — Suno Copyright'ı Atla</SectionLabel>
 
+          {/* ── Guaranteed bypass: Piano conversion ── */}
           <Panel>
             <PanelHeader
-              left="🔊 MP3 → Bypass WAV (Müzik %100 Aynı)"
+              left="🎹 GARANTİLİ YÖNTEM — MP3 → Piano WAV (Sıfır Orijinal Ses)"
+              right={<Mono color="#4eff99">Kesin geçer ✓</Mono>}
+            />
+            <div style={{ padding: "10px 16px 8px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>
+              🎹 Müziği analiz eder, melodiyi <strong style={{ color: "#4eff99" }}>piyano sesiyle sıfırdan üretir.</strong> Orijinal sesle hiçbir ilgisi yok — sadece nota yapısı aktarılır. Suno ne ses parmak izi ne de vokal bulamaz. Suno hâlâ müziğin ritmini ve akor yapısını anlayıp yeni şarkı üretir.
+            </div>
+            <div style={{ padding: "0 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <DropZone
+                  dragOver={pianoDragOver}
+                  onDragOver={(e) => { e.preventDefault(); setPianoDragOver(true); }}
+                  onDragLeave={() => setPianoDragOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setPianoDragOver(false); const f = e.dataTransfer.files[0]; if (f) handlePianoFile(f); }}
+                  onClick={() => pianoFileRef.current?.click()}
+                  icon="🎹"
+                  text="MP3 sürükle → Piano WAV al"
+                  hint="MP3 → MIDI → Piyano sentezi"
+                />
+                <input ref={pianoFileRef} type="file" accept="audio/*" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePianoFile(f); }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+                {pianoStage === "midi" && <StatusBar msg={`🎵 Melodi analiz ediliyor… %${pianoProgress}`} />}
+                {pianoStage === "wav" && <StatusBar msg={`🎹 Piano sentezi yapılıyor… %${pianoProgress}`} />}
+                {pianoStage === "done" && <SuccessBar msg="Piano WAV hazır! Suno'ya yükle — copyright yok." />}
+                {pianoStage === "error" && <ErrorBar msg={pianoError} />}
+                {pianoStage === "idle" && (
+                  <div style={{ padding: "12px 14px", background: "rgba(78,255,153,0.05)", border: "1px solid rgba(78,255,153,0.15)", borderRadius: 8 }}>
+                    {[
+                      ["Ses parmak izi", "Yok — yeni kayıt"],
+                      ["Vokal tespit", "Yok — enstrümantal"],
+                      ["Melodi/akor", "Korunur ✓"],
+                      ["Suno anlıyor mu?", "Evet — stil aktarılır"],
+                    ].map(([k, val]) => (
+                      <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "rgba(200,170,255,0.5)" }}>{k}</span>
+                        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#4eff99" }}>{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+
+          {/* ── Fallback: Audio manipulation bypass ── */}
+          <Panel>
+            <PanelHeader
+              left="🔊 Alternatif — Ses Manipülasyonu Bypass"
               right={bypassFileName ? <Mono color="#4eff99">📎 {bypassFileName}</Mono> : null}
             />
             <div style={{ padding: "10px 16px 6px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>

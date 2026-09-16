@@ -462,7 +462,7 @@ export default function App() {
     }
   }, [bypassMode]);
 
-  // ── Piano conversion (guaranteed bypass: MP3 → MIDI → Piano WAV) ──
+  // ── Piano conversion: MP3 → MIDI → Piano WAV ──
   const [pianoStage, setPianoStage] = useState<"idle"|"midi"|"wav"|"done"|"error">("idle");
   const [pianoProgress, setPianoProgress] = useState(0);
   const [pianoError, setPianoError] = useState("");
@@ -474,11 +474,9 @@ export default function App() {
     setPianoProgress(5);
     setPianoError("");
     try {
-      // Step 1: MP3 → MIDI
       const midiBlob = await audioToMidi(file, 1.0, 0);
       setPianoProgress(50);
       setPianoStage("wav");
-      // Step 2: MIDI → Piano WAV
       const wav = await midiToWav(midiBlob, (pct) => setPianoProgress(50 + Math.round(pct * 0.5)));
       const base = file.name.replace(/\.[^.]+$/, "");
       downloadBlob(wav, `${base}_piano.wav`);
@@ -487,6 +485,29 @@ export default function App() {
     } catch (e: unknown) {
       setPianoError(e instanceof Error ? e.message : "Hata");
       setPianoStage("error");
+    }
+  }, []);
+
+  // ── MIDI → WAV (dış MIDI dosyası yükle) ──
+  const [midiWavStage, setMidiWavStage] = useState<"idle"|"processing"|"done"|"error">("idle");
+  const [midiWavProgress, setMidiWavProgress] = useState(0);
+  const [midiWavError, setMidiWavError] = useState("");
+  const [midiWavDragOver, setMidiWavDragOver] = useState(false);
+  const midiWavFileRef = useRef<HTMLInputElement>(null);
+
+  const handleMidiWavFile = useCallback(async (file: File) => {
+    setMidiWavStage("processing");
+    setMidiWavProgress(0);
+    setMidiWavError("");
+    try {
+      const blob = new Blob([await file.arrayBuffer()], { type: "audio/midi" });
+      const wav = await midiToWav(blob, (pct) => setMidiWavProgress(pct));
+      const base = file.name.replace(/\.[^.]+$/, "");
+      downloadBlob(wav, `${base}_piano.wav`);
+      setMidiWavStage("done");
+    } catch (e: unknown) {
+      setMidiWavError(e instanceof Error ? e.message : "Hata");
+      setMidiWavStage("error");
     }
   }, []);
 
@@ -757,6 +778,46 @@ export default function App() {
                         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#4eff99" }}>{val}</span>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+
+          {/* ── External MIDI → Piano WAV ── */}
+          <Panel>
+            <PanelHeader
+              left="🎼 Dış MIDI → Piano WAV (musiccreator.ai veya başka araçtan)"
+              right={<Mono color="#a78bfa">En iyi kalite yöntemi</Mono>}
+            />
+            <div style={{ padding: "10px 16px 8px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>
+              <strong style={{ color: "#a78bfa" }}>Adım 1:</strong> musiccreator.ai/midi-editor sitesine MP3 yükle → MIDI indir<br/>
+              <strong style={{ color: "#4eff99" }}>Adım 2:</strong> O MIDI dosyasını buraya sürükle → Piano WAV indir → Suno'ya yükle
+            </div>
+            <div style={{ padding: "0 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <DropZone
+                  dragOver={midiWavDragOver}
+                  onDragOver={(e) => { e.preventDefault(); setMidiWavDragOver(true); }}
+                  onDragLeave={() => setMidiWavDragOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setMidiWavDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleMidiWavFile(f); }}
+                  onClick={() => midiWavFileRef.current?.click()}
+                  icon="🎼"
+                  text=".mid dosyası sürükle veya tıkla"
+                  hint="musiccreator.ai'dan indirdiğin MIDI"
+                />
+                <input ref={midiWavFileRef} type="file" accept=".mid,.midi,audio/midi" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMidiWavFile(f); }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+                {midiWavStage === "processing" && <StatusBar msg={`🎹 Piano sentezi… %${midiWavProgress}`} />}
+                {midiWavStage === "done" && <SuccessBar msg="Piano WAV hazır! Suno'ya yükle." />}
+                {midiWavStage === "error" && <ErrorBar msg={midiWavError} />}
+                {midiWavStage === "idle" && (
+                  <div style={{ padding: "12px 14px", background: "rgba(167,139,250,0.06)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 8, fontFamily: "'Outfit',sans-serif", fontSize: 12, color: "rgba(200,170,255,0.6)", lineHeight: 1.8 }}>
+                    💡 musiccreator.ai AI ile çok daha iyi MIDI üretiyor.
+                    Oradan indirdiğin .mid dosyasını buraya at,
+                    piano WAV olarak Suno'ya yükle.
                   </div>
                 )}
               </div>

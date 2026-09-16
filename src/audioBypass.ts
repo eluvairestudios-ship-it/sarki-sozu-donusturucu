@@ -1,5 +1,7 @@
-// Audio bypass: pitch shift WITHOUT tempo change + multi-layer fingerprint breaking
-// OLA (Overlap-Add) time stretching + linear resampling = true pitch shift
+// NUCLEAR BYPASS:
+// 1. Vocal removal via mid-side processing (karaoke effect) — lyrics undetectable
+// 2. OLA pitch shift without tempo change — audio fingerprint broken
+// 3. EQ + saturation + reverb — extra fingerprint layers
 
 // ─── WAV encoder ─────────────────────────────────────────────────────────────
 function audioBufferToWav(buffer: AudioBuffer): Blob {
@@ -30,22 +32,35 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([wav], { type: "audio/wav" });
 }
 
-// ─── OLA time stretching ──────────────────────────────────────────────────────
-// Stretches audio by `factor` without changing pitch.
-// e.g. factor=1.122 → audio 12.2% longer, same pitch
+// ─── Vocal removal (mid-side karaoke) ────────────────────────────────────────
+// Stereo music has vocals center-panned (equal in L and R).
+// Subtracting center content kills vocals while keeping instruments (panned L/R).
+// vocalKeep=0 → full karaoke, vocalKeep=1 → original
+function removeVocals(L: Float32Array, R: Float32Array, vocalKeep = 0.05): [Float32Array, Float32Array] {
+  const len = L.length;
+  const outL = new Float32Array(len);
+  const outR = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const mid = (L[i] + R[i]) * 0.5;
+    const side = (L[i] - R[i]) * 0.5;
+    // Keep tiny amount of mid to preserve bass/kick, remove vocal range
+    outL[i] = mid * vocalKeep + side;
+    outR[i] = mid * vocalKeep - side;
+  }
+  return [outL, outR];
+}
+
+// ─── OLA time stretching (for pitch shift without tempo change) ───────────────
 function olaStretch(mono: Float32Array, factor: number): Float32Array {
   const windowSize = 2048;
   const hopSize = 512;
   const outLength = Math.round(mono.length * factor);
   const output = new Float32Array(outLength);
   const norm = new Float32Array(outLength);
-
-  // Hann window
   const win = new Float32Array(windowSize);
   for (let i = 0; i < windowSize; i++) {
     win[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (windowSize - 1)));
   }
-
   let frame = 0;
   while (true) {
     const inPos = frame * hopSize;
@@ -64,10 +79,9 @@ function olaStretch(mono: Float32Array, factor: number): Float32Array {
   return output;
 }
 
-// ─── Linear interpolation resampler ──────────────────────────────────────────
 function linResample(input: Float32Array, outLength: number): Float32Array {
   const output = new Float32Array(outLength);
-  const ratio = (input.length - 1) / (outLength - 1);
+  const ratio = (input.length - 1) / Math.max(outLength - 1, 1);
   for (let i = 0; i < outLength; i++) {
     const pos = i * ratio;
     const idx = Math.floor(pos);
@@ -79,14 +93,9 @@ function linResample(input: Float32Array, outLength: number): Float32Array {
   return output;
 }
 
-// ─── Pitch shift (no tempo change) ───────────────────────────────────────────
-// semitones > 0: pitch up, semitones < 0: pitch down
-// Tempo stays the same — only the key/pitch of the song changes.
 function pitchShiftMono(mono: Float32Array, semitones: number): Float32Array {
   const factor = Math.pow(2, semitones / 12);
-  // Step 1: OLA stretch by factor → same pitch, longer duration
   const stretched = olaStretch(mono, factor);
-  // Step 2: resample back to original length → raises pitch, original tempo
   return linResample(stretched, mono.length);
 }
 
@@ -98,7 +107,6 @@ function saturate(x: number, drive: number): number {
   return g - (g * g * g) / 3;
 }
 
-// ─── Impulse response for room reverb ────────────────────────────────────────
 function makeIR(ctx: OfflineAudioContext, decaySec = 0.5): AudioBuffer {
   const len = Math.floor(ctx.sampleRate * decaySec);
   const ir = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -112,54 +120,33 @@ function makeIR(ctx: OfflineAudioContext, decaySec = 0.5): AudioBuffer {
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
-export type BypassStrength = "mild" | "medium" | "strong";
+export type BypassMode = "fingerprint" | "vocal" | "nuclear";
 
-interface Profile {
-  semitones: number;
-  saturation: number;
-  reverbWet: number;
-  noiseLevel: number;
-  label: string;
-  tempoNote: string;
-}
-
-export const PROFILES: Record<BypassStrength, Profile> = {
-  mild: {
-    semitones: 1,
-    saturation: 0.02,
-    reverbWet: 0.06,
-    noiseLevel: 0.0003,
-    label: "Hafif — +1 yarım ton, tempo aynı",
-    tempoNote: "Pek fark edilmez",
+export const MODE_LABELS: Record<BypassMode, { label: string; desc: string; color: string }> = {
+  fingerprint: {
+    label: "🔊 Sadece Parmak İzi",
+    desc: "+2 yarım ton, vokal korunur",
+    color: "#38bdf8",
   },
-  medium: {
-    semitones: 2,
-    saturation: 0.04,
-    reverbWet: 0.10,
-    noiseLevel: 0.0005,
-    label: "Orta ⭐ — +2 yarım ton, tempo aynı",
-    tempoNote: "Dikkatli dinleyenler fark eder",
+  vocal: {
+    label: "🎤 Sadece Vokal Sil",
+    desc: "Karaoke efekti, perde aynı",
+    color: "#fb923c",
   },
-  strong: {
-    semitones: 3,
-    saturation: 0.07,
-    reverbWet: 0.14,
-    noiseLevel: 0.001,
-    label: "Güçlü — +3 yarım ton, tempo aynı",
-    tempoNote: "Perde farkı belirgin ama müzik kaliteli",
+  nuclear: {
+    label: "💥 Nuclear — İkisi Birden",
+    desc: "Vokal sil + pitch shift + EQ + reverb",
+    color: "#4eff99",
   },
 };
 
 export async function bypassAudio(
   file: File,
-  strength: BypassStrength = "medium",
+  mode: BypassMode = "nuclear",
   onProgress?: (pct: number) => void
 ): Promise<Blob> {
-  const p = PROFILES[strength];
-
   onProgress?.(5);
 
-  // Decode
   const arrayBuf = await file.arrayBuffer();
   const tmpCtx = new AudioContext();
   const decoded = await tmpCtx.decodeAudioData(arrayBuf);
@@ -169,72 +156,93 @@ export async function bypassAudio(
 
   const sr = decoded.sampleRate;
   const numCh = decoded.numberOfChannels;
+  const isStereo = numCh >= 2;
 
-  // ── CPU-side: pitch shift + saturation per channel ────────────────────────
-  const processedBuf = new AudioBuffer({ numberOfChannels: numCh, length: decoded.length, sampleRate: sr });
+  const doVocal = mode === "vocal" || mode === "nuclear";
+  const doPitch = mode === "fingerprint" || mode === "nuclear";
+  const semitones = doPitch ? 2 : 0;
+
+  // ── CPU processing ────────────────────────────────────────────────────────
+  const channels: Float32Array[] = [];
 
   for (let c = 0; c < numCh; c++) {
-    const raw = decoded.getChannelData(c);
+    channels.push(new Float32Array(decoded.getChannelData(c)));
+  }
 
-    // 1. Pitch shift (OLA + resample) — tempo unchanged
-    const pitched = pitchShiftMono(raw, p.semitones);
+  // Step 1: Vocal removal (mid-side)
+  let processedChannels = channels;
+  if (doVocal && isStereo) {
+    const [outL, outR] = removeVocals(channels[0], channels[1]);
+    processedChannels = [outL, outR, ...channels.slice(2)];
+  }
 
-    // 2. Soft saturation — changes waveform shape, breaks PCM fingerprint
+  onProgress?.(30);
+
+  // Step 2: Pitch shift per channel (OLA + resample)
+  const finalChannels: Float32Array[] = [];
+  for (let c = 0; c < processedChannels.length; c++) {
+    const ch = processedChannels[c];
+    const pitched = doPitch ? pitchShiftMono(ch, semitones) : ch;
+    // Step 3: Saturation
     const sat = new Float32Array(pitched.length);
     for (let i = 0; i < pitched.length; i++) {
-      sat[i] = saturate(pitched[i], p.saturation);
+      sat[i] = saturate(pitched[i], mode === "nuclear" ? 0.04 : 0.01);
     }
-
-    processedBuf.copyToChannel(sat, c);
-    onProgress?.(15 + Math.round((c + 1) / numCh * 55)); // 15→70%
+    finalChannels.push(sat);
+    onProgress?.(30 + Math.round(((c + 1) / processedChannels.length) * 40));
   }
 
   onProgress?.(72);
 
   // ── Web Audio graph: EQ + reverb + noise ─────────────────────────────────
-  const offline = new OfflineAudioContext(numCh, decoded.length, sr);
+  const outNumCh = Math.min(finalChannels.length, 2);
+  const offline = new OfflineAudioContext(outNumCh, decoded.length, sr);
+
+  const procBuf = offline.createBuffer(outNumCh, decoded.length, sr);
+  for (let c = 0; c < outNumCh; c++) {
+    procBuf.copyToChannel(new Float32Array(finalChannels[c]), c);
+  }
 
   const src = offline.createBufferSource();
-  src.buffer = processedBuf;
+  src.buffer = procBuf;
 
-  // High-shelf cut: −2 dB above 10 kHz → changes spectral fingerprint
+  // Vocal frequency notch (300–3kHz area — extra vocal suppression)
+  const vocalNotch = offline.createBiquadFilter();
+  vocalNotch.type = "peaking";
+  vocalNotch.frequency.value = 1200;
+  vocalNotch.Q.value = 0.7;
+  vocalNotch.gain.value = doVocal ? -8 : -1;
+
+  // High shelf
   const highShelf = offline.createBiquadFilter();
   highShelf.type = "highshelf";
   highShelf.frequency.value = 10000;
-  highShelf.gain.value = -2.0;
+  highShelf.gain.value = -2;
 
-  // Low-shelf boost: +1.5 dB below 250 Hz
+  // Low shelf boost
   const lowShelf = offline.createBiquadFilter();
   lowShelf.type = "lowshelf";
   lowShelf.frequency.value = 250;
   lowShelf.gain.value = 1.5;
 
-  // Notch at 1 kHz (subtle — changes mid-range fingerprint)
-  const notch = offline.createBiquadFilter();
-  notch.type = "notch";
-  notch.frequency.value = 1000;
-  notch.Q.value = 0.5;
-  notch.gain.value = -1.0;
-
-  // Reverb (changes room acoustic fingerprint)
+  // Reverb
   const convolver = offline.createConvolver();
-  convolver.buffer = makeIR(offline, 0.5);
+  convolver.buffer = makeIR(offline);
   const dryGain = offline.createGain();
-  dryGain.gain.value = 1 - p.reverbWet;
+  dryGain.gain.value = mode === "nuclear" ? 0.88 : 0.94;
   const wetGain = offline.createGain();
-  wetGain.gain.value = p.reverbWet;
+  wetGain.gain.value = mode === "nuclear" ? 0.12 : 0.06;
 
-  // Inaudible noise (changes raw waveform fingerprint)
-  const noiseLen = decoded.length;
-  const noiseBuf = offline.createBuffer(numCh, noiseLen, sr);
-  for (let c = 0; c < numCh; c++) {
+  // Inaudible noise
+  const noiseLevel = mode === "nuclear" ? 0.0008 : 0.0003;
+  const noiseBuf = offline.createBuffer(outNumCh, decoded.length, sr);
+  for (let c = 0; c < outNumCh; c++) {
     const ch = noiseBuf.getChannelData(c);
-    for (let i = 0; i < noiseLen; i++) ch[i] = (Math.random() * 2 - 1) * p.noiseLevel;
+    for (let i = 0; i < decoded.length; i++) ch[i] = (Math.random() * 2 - 1) * noiseLevel;
   }
   const noiseSrc = offline.createBufferSource();
   noiseSrc.buffer = noiseBuf;
 
-  // Limiter to prevent clipping
   const limiter = offline.createDynamicsCompressor();
   limiter.threshold.value = -0.5;
   limiter.knee.value = 0;
@@ -242,12 +250,11 @@ export async function bypassAudio(
   limiter.attack.value = 0.001;
   limiter.release.value = 0.1;
 
-  // Graph
-  src.connect(highShelf);
+  src.connect(vocalNotch);
+  vocalNotch.connect(highShelf);
   highShelf.connect(lowShelf);
-  lowShelf.connect(notch);
-  notch.connect(dryGain);
-  notch.connect(convolver);
+  lowShelf.connect(dryGain);
+  lowShelf.connect(convolver);
   convolver.connect(wetGain);
   dryGain.connect(limiter);
   wetGain.connect(limiter);
@@ -258,7 +265,6 @@ export async function bypassAudio(
   noiseSrc.start(0);
 
   const rendered = await offline.startRendering();
-
   onProgress?.(95);
 
   const wav = audioBufferToWav(rendered);

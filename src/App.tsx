@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { audioToMidi } from "./midi";
 import { midiToWav } from "./midiToAudio";
-import { bypassAudio, PROFILES, type BypassStrength } from "./audioBypass";
+import { bypassAudio, MODE_LABELS, type BypassMode } from "./audioBypass";
 
 const ENV_KEY = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
 
@@ -306,7 +306,7 @@ export default function App() {
   const [bypassProgress, setBypassProgress] = useState(0);
   const [bypassError, setBypassError] = useState("");
   const [bypassFileName, setBypassFileName] = useState("");
-  const [bypassStrength, setBypassStrength] = useState<BypassStrength>("medium");
+  const [bypassMode, setBypassMode] = useState<BypassMode>("nuclear");
   const bypassFileRef = useRef<HTMLInputElement>(null);
 
   // ElevenLabs cover
@@ -452,7 +452,7 @@ export default function App() {
     setBypassProgress(0);
     setBypassError("");
     try {
-      const wav = await bypassAudio(file, bypassStrength, (pct) => setBypassProgress(pct));
+      const wav = await bypassAudio(file, bypassMode, (pct) => setBypassProgress(pct));
       const base = file.name.replace(/\.[^.]+$/, "");
       downloadBlob(wav, `${base}_bypass.wav`);
       setBypassStage("done");
@@ -460,7 +460,7 @@ export default function App() {
       setBypassError(e instanceof Error ? e.message : "Hata");
       setBypassStage("error");
     }
-  }, [bypassStrength]);
+  }, [bypassMode]);
 
   // ── ElevenLabs ──
   // Hardcoded popular ElevenLabs voices — no voices_read permission needed
@@ -693,29 +693,31 @@ export default function App() {
               right={bypassFileName ? <Mono color="#4eff99">📎 {bypassFileName}</Mono> : null}
             />
             <div style={{ padding: "10px 16px 6px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>
-              🎯 <strong style={{ color: "rgba(200,170,255,0.9)" }}>Nasıl çalışır?</strong> 5 katman birden uygular:
-              <strong style={{ color: "#4eff99" }}>Gerçek pitch shift</strong> (tempo DEĞİŞMEZ) + EQ + satürasyon + reverb.
-              Suno sadece perde biraz farklı olan aynı müziği duyar — tanıyamaz.
+              🎯 Suno <strong style={{ color: "#ff6b6b" }}>iki ayrı sistem</strong> kullanıyor:
+              ses parmak izi <em>ve</em> vokaldeki sözleri tanıma.
+              <strong style={{ color: "#4eff99" }}> Nuclear mod ikisini birden kırar.</strong>
             </div>
             <div style={{ padding: "8px 16px 14px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(["mild", "medium", "strong"] as BypassStrength[]).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setBypassStrength(s)}
-                  style={{
-                    flex: 1, minWidth: 140, padding: "10px 12px", borderRadius: 8, cursor: "pointer",
-                    border: bypassStrength === s ? "2px solid #4eff99" : "1px solid rgba(255,255,255,0.12)",
-                    background: bypassStrength === s ? "rgba(78,255,153,0.12)" : "rgba(255,255,255,0.04)",
-                    color: bypassStrength === s ? "#4eff99" : "rgba(200,170,255,0.6)",
-                    fontFamily: "'Outfit',sans-serif", fontSize: 12, textAlign: "left" as const,
-                  }}
-                >
-                  <div style={{ fontWeight: 700, marginBottom: 3 }}>
-                    {s === "mild" ? "Hafif" : s === "medium" ? "Orta ⭐" : "Güçlü"}
-                  </div>
-                  <div style={{ fontSize: 10.5, opacity: 0.75 }}>{PROFILES[s].label}</div>
-                </button>
-              ))}
+              {(["fingerprint", "vocal", "nuclear"] as BypassMode[]).map((m) => {
+                const info = MODE_LABELS[m];
+                const active = bypassMode === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setBypassMode(m)}
+                    style={{
+                      flex: 1, minWidth: 140, padding: "10px 12px", borderRadius: 8, cursor: "pointer",
+                      border: active ? `2px solid ${info.color}` : "1px solid rgba(255,255,255,0.12)",
+                      background: active ? `${info.color}18` : "rgba(255,255,255,0.04)",
+                      color: active ? info.color : "rgba(200,170,255,0.6)",
+                      fontFamily: "'Outfit',sans-serif", fontSize: 12, textAlign: "left" as const,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 3 }}>{info.label}</div>
+                    <div style={{ fontSize: 10.5, opacity: 0.75 }}>{info.desc}</div>
+                  </button>
+                );
+              })}
             </div>
             <div style={{ padding: "0 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
               <div>
@@ -743,10 +745,10 @@ export default function App() {
                 {bypassStage === "idle" && (
                   <div style={{ padding: "12px 14px", background: "rgba(78,255,153,0.05)", border: "1px solid rgba(78,255,153,0.12)", borderRadius: 8 }}>
                     {[
-                      ["Perde", `+${PROFILES[bypassStrength].semitones} yarım ton`],
+                      ["Vokal silme", bypassMode !== "fingerprint" ? "Aktif ✓" : "Kapalı"],
+                      ["Perde kayması", bypassMode !== "vocal" ? "+2 yarım ton ✓" : "Kapalı"],
                       ["Tempo", "Değişmez ✓"],
-                      ["Müzik kalitesi", "PCM WAV, sıfır kayıp"],
-                      ["Teknikler", "OLA + EQ + Sat. + Reverb"],
+                      ["Teknikler", bypassMode === "nuclear" ? "6 katman ☢" : "3 katman"],
                     ].map(([k, val]) => (
                       <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "rgba(200,170,255,0.5)" }}>{k}</span>

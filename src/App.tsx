@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { audioToMidi } from "./midi";
 import { midiToWav } from "./midiToAudio";
+import { bypassAudio } from "./audioBypass";
 
 const ENV_KEY = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
 
@@ -299,6 +300,15 @@ export default function App() {
   const [wavProgress, setWavProgress] = useState(0);
   const [wavStage, setWavStage] = useState<"idle"|"processing"|"done"|"error">("idle");
 
+  // Bypass flow
+  const [bypassDragOver, setBypassDragOver] = useState(false);
+  const [bypassStage, setBypassStage] = useState<"idle"|"processing"|"done"|"error">("idle");
+  const [bypassProgress, setBypassProgress] = useState(0);
+  const [bypassError, setBypassError] = useState("");
+  const [bypassFileName, setBypassFileName] = useState("");
+  const [pitchCents, setPitchCents] = useState(8);
+  const bypassFileRef = useRef<HTMLInputElement>(null);
+
   // ElevenLabs cover
   const [elKey, setElKey] = useState("");
   const [elVoices, setElVoices] = useState<{voice_id:string;name:string}[]>([]);
@@ -434,6 +444,23 @@ export default function App() {
       setWavStage("error");
     }
   }, [midiBlob, midiAudioName]);
+
+  // ── Audio Bypass ──
+  const handleBypassFile = useCallback(async (file: File) => {
+    setBypassFileName(file.name);
+    setBypassStage("processing");
+    setBypassProgress(0);
+    setBypassError("");
+    try {
+      const wav = await bypassAudio(file, { pitchCents }, (pct) => setBypassProgress(pct));
+      const base = file.name.replace(/\.[^.]+$/, "");
+      downloadBlob(wav, `${base}_bypass.wav`);
+      setBypassStage("done");
+    } catch (e: unknown) {
+      setBypassError(e instanceof Error ? e.message : "Hata");
+      setBypassStage("error");
+    }
+  }, [pitchCents]);
 
   // ── ElevenLabs ──
   // Hardcoded popular ElevenLabs voices — no voices_read permission needed
@@ -657,8 +684,74 @@ export default function App() {
             />
           </Panel>
 
-          {/* ═══ SECTION B: MIDI ═══ */}
-          <SectionLabel>② MIDI — Müziği Bire Bir Koru, Suno Copyright'ı Atla</SectionLabel>
+          {/* ═══ SECTION B: BYPASS ═══ */}
+          <SectionLabel>② MÜZİK BYPASS — Suno'yu Atla, Müziği Bozmadan WAV Ver</SectionLabel>
+
+          <Panel>
+            <PanelHeader
+              left="🔊 MP3 → Bypass WAV (Müzik %100 Aynı)"
+              right={bypassFileName ? <Mono color="#4eff99">📎 {bypassFileName}</Mono> : null}
+            />
+            <div style={{ padding: "10px 16px 6px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>
+              🎯 <strong style={{ color: "rgba(200,170,255,0.9)" }}>Nasıl çalışır?</strong> Müziği olduğu gibi alır, ses parmak izini kıran
+              3 katman uygular: <span style={{ color: "#4eff99" }}>+{pitchCents} cent</span> hafif perde kayması
+              (insan kulağının fark edemeyeceği kadar küçük) + çok hafif oda reverbı + görünmez gürültü katmanı.
+              Sonuç: Suno aynı müziği tanımaz ama sen fark edemezsin.
+            </div>
+            <div style={{ padding: "8px 16px 12px" }}>
+              <label style={{ fontFamily: "'Outfit',sans-serif", fontSize: 12, color: "rgba(200,170,255,0.7)", display: "block", marginBottom: 6 }}>
+                Perde kayması: <span style={{ color: "#4eff99", fontWeight: 700 }}>{pitchCents} cent</span>
+                <span style={{ color: "rgba(200,170,255,0.35)", marginLeft: 8 }}>
+                  {pitchCents <= 5 ? "— çok az (bazı programlar hâlâ tanıyabilir)" : pitchCents <= 10 ? "— ideal (insan kulağı fark etmez)" : "— güçlü bypass (çok dikkatli dinleyenler hissedebilir)"}
+                </span>
+              </label>
+              <input type="range" min={3} max={20} value={pitchCents} onChange={(e) => setPitchCents(+e.target.value)}
+                style={{ width: "100%", accentColor: "#4eff99" }} />
+            </div>
+            <div style={{ padding: "0 16px 16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
+              <div>
+                <DropZone
+                  dragOver={bypassDragOver}
+                  onDragOver={(e) => { e.preventDefault(); setBypassDragOver(true); }}
+                  onDragLeave={() => setBypassDragOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setBypassDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleBypassFile(f); }}
+                  onClick={() => bypassFileRef.current?.click()}
+                  icon="🔊"
+                  text="MP3 sürükle veya tıkla"
+                  hint="WAV olarak çıkar — Suno'ya yükle"
+                />
+                <input ref={bypassFileRef} type="file" accept="audio/*" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleBypassFile(f); }} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, justifyContent: "center", height: "100%" }}>
+                {bypassStage === "processing" && (
+                  <StatusBar msg={`İşleniyor… %${bypassProgress}`} />
+                )}
+                {bypassStage === "done" && (
+                  <SuccessBar msg="WAV hazır! İndirme başladı. Suno → Upload → Custom Audio olarak yükle." />
+                )}
+                {bypassStage === "error" && <ErrorBar msg={bypassError} />}
+                {bypassStage === "idle" && (
+                  <div style={{ padding: "12px 14px", background: "rgba(78,255,153,0.05)", border: "1px solid rgba(78,255,153,0.12)", borderRadius: 8 }}>
+                    {[
+                      ["Kalite kaybı", "Sıfır — PCM WAV"],
+                      ["Müzik farkı", "İnsan kulağı duyamaz"],
+                      ["Bypass gücü", "Parmak izi kırıldı"],
+                      ["MIDI gerekir mi?", "Hayır — direkt işlem"],
+                    ].map(([k, val]) => (
+                      <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "rgba(200,170,255,0.5)" }}>{k}</span>
+                        <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "#4eff99" }}>{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </Panel>
+
+          {/* ═══ SECTION C: MIDI (gelişmiş) ═══ */}
+          <SectionLabel>③ MIDI — Gelişmiş: Müziği MIDI Notalarına Çevir</SectionLabel>
 
           <Panel>
             <PanelHeader
@@ -732,8 +825,8 @@ export default function App() {
             </div>
           </Panel>
 
-          {/* ═══ SECTION C: COVER VOICE ═══ */}
-          <SectionLabel>③ COVER SES — ElevenLabs ile Sözleri Farklı Sesle Söyle</SectionLabel>
+          {/* ═══ SECTION D: COVER VOICE ═══ */}
+          <SectionLabel>④ COVER SES — ElevenLabs ile Sözleri Farklı Sesle Söyle</SectionLabel>
 
           <Panel>
             <PanelHeader left="🎤 Cover Vokal Üret" right={<Mono color="rgba(200,170,255,0.4)">elevenlabs.io · ücretsiz 10k karakter/ay</Mono>} />

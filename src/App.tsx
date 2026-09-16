@@ -14,7 +14,16 @@ interface WhisperWord { word: string; start: number; end: number; }
 interface WhisperSegment { text: string; start: number; end: number; words?: WhisperWord[]; }
 interface WhisperVerbose { segments: WhisperSegment[]; }
 
+function assertAsciiKey(key: string) {
+  for (let i = 0; i < key.length; i++) {
+    if (key.charCodeAt(i) > 127) {
+      throw new Error(`API anahtarında geçersiz karakter var (konum ${i}: '${key[i]}'). Anahtarınızı kontrol edin — Türkçe karakter içermemeli.`);
+    }
+  }
+}
+
 async function transcribeAudioTimed(file: File, key: string): Promise<WhisperVerbose> {
+  assertAsciiKey(key);
   const p = detectProvider(key);
   // Groq supports word timestamps too
   const url = p === "groq"
@@ -110,8 +119,56 @@ function addExtension(word: string, ext: string): string {
   return vowelRe.test(word) ? word.replace(vowelRe, `$1${ext}`) : word + ext;
 }
 
+// ─── GPT: Doğru sözleri Whisper zamanlamasıyla hizala ────────────────────────
+async function alignLyricsWithTiming(
+  correctLyrics: string,
+  timedLyrics: string,
+  key: string
+): Promise<string> {
+  assertAsciiKey(key);
+  const p = detectProvider(key);
+  const url = p === "groq"
+    ? "https://api.groq.com/openai/v1/chat/completions"
+    : "https://api.openai.com/v1/chat/completions";
+  const model = p === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Sen iki şarkı sözü metnini karşılaştıran ve birleştiren uzmansın.\n\n" +
+            "Sana iki metin verilecek:\n" +
+            "1. DOĞRU SÖZLER: Kullanıcının internetten kopyaladığı, %100 doğru kelimeler\n" +
+            "2. ZAMANLAMALI SÖZLER: Whisper'ın sesden çıkardığı, ~ ve ~~ işaretleri olan, satır kesmeli versiyon\n\n" +
+            "Görevin:\n" +
+            "- DOĞRU SÖZLER'deki kelimeleri kullan (bunlar kesinlikle doğru)\n" +
+            "- ZAMANLAMALI SÖZLER'deki ~ ~~ , ... işaretlerini ve satır kesmelerini al\n" +
+            "- [Verse], [Chorus] gibi etiketleri koru veya ekle\n" +
+            "- İki metni hizala: doğru kelime + doğru zamanlama işareti\n" +
+            "- Kelimeleri ASLA değiştirme, ekleyip çıkarma\n\n" +
+            "Sadece sonuç metnini döndür, açıklama yazma.",
+        },
+        {
+          role: "user",
+          content: `DOĞRU SÖZLER:\n${correctLyrics}\n\nZAMANLAMALI SÖZLER:\n${timedLyrics}`,
+        },
+      ],
+      temperature: 0,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const json = await res.json();
+  return json.choices[0].message.content.trim();
+}
+
 // ─── GPT lyrics formatter ─────────────────────────────────────────────────────
 async function formatLyricsWithGPT(timedLyrics: string, key: string): Promise<string> {
+  assertAsciiKey(key);
   const p = detectProvider(key);
   const url = p === "groq"
     ? "https://api.groq.com/openai/v1/chat/completions"
@@ -223,10 +280,13 @@ export default function App() {
   const [stageMsg, setStageMsg] = useState("");
   const [audioName, setAudioName] = useState("");
   const [rawLyrics, setRawLyrics] = useState("");
+  const [correctLyrics, setCorrectLyrics] = useState("");
+  const [timedLyricsRaw, setTimedLyricsRaw] = useState("");
   const [formattedLyrics, setFormattedLyrics] = useState("");
   const [lines, setLines] = useState<Line[]>([]);
   const [pasteZone, setPasteZone] = useState("");
   const [lyricsError, setLyricsError] = useState("");
+  const [alignStage, setAlignStage] = useState<"idle"|"aligning"|"done"|"error">("idle");
 
   // MIDI flow
   const [midiStage, setMidiStage] = useState<MidiStage>("idle");
@@ -273,6 +333,7 @@ export default function App() {
       setStage("formatting");
       setStageMsg("Zamanlama analiz ediliyor — duraklar, uzatmalar, yükselmeler işaretleniyor…");
       const timedLyrics = buildTimedLyrics(timed);
+      setTimedLyricsRaw(timedLyrics);
 
       setStageMsg("GPT ile bölümler ve yapı düzenleniyor…");
       const fmt = await formatLyricsWithGPT(timedLyrics, apiKey.trim());
@@ -290,6 +351,27 @@ export default function App() {
       setStage("error");
     }
   }, [apiKey]);
+
+  const handleAlign = async () => {
+    if (!correctLyrics.trim() || !apiKey.trim()) return;
+    setAlignStage("aligning");
+    setLyricsError("");
+    try {
+      const timed = timedLyricsRaw || rawLyrics;
+      const aligned = await alignLyricsWithTiming(correctLyrics, timed, apiKey.trim());
+      setFormattedLyrics(aligned);
+      const ls: Line[] = aligned.split("\n").map((line) => ({
+        original: line, converted: annotateLine(line),
+      }));
+      setLines(ls);
+      setPasteZone(ls.map((l) => l.converted).join("\n"));
+      setAlignStage("done");
+      setStage("done");
+    } catch (e: unknown) {
+      setLyricsError(e instanceof Error ? e.message : "Hata");
+      setAlignStage("error");
+    }
+  };
 
   const handleManualFormat = async () => {
     if (!rawLyrics.trim() || !apiKey.trim()) return;
@@ -426,7 +508,7 @@ export default function App() {
               <input
                 type={showKey ? "text" : "password"}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => setApiKey(e.target.value.replace(/[^\x00-\x7F]/g, ""))}
                 placeholder="gsk_... (Groq ücretsiz) veya sk-... (OpenAI)"
                 style={{ flex: 1, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, padding: "8px 12px", fontFamily: "'JetBrains Mono',monospace", fontSize: 12.5, color: "rgba(235,220,255,0.9)", outline: "none" }}
               />
@@ -479,6 +561,38 @@ export default function App() {
               </PanelFooter>
             </Panel>
           </div>
+
+          {/* Correct Lyrics alignment panel — shown after transcription */}
+          {(stage === "done" || timedLyricsRaw) && (
+            <Panel>
+              <PanelHeader
+                left="🔍 Doğru Sözleri Yapıştır → Zamanlama ile Hizala"
+                right={<Mono color="rgba(200,170,255,0.5)">İnternetten kopyaladığın doğru sözler + Whisper ritim zamanlaması</Mono>}
+              />
+              <div style={{ padding: "12px 16px 4px", fontFamily: "'Outfit',sans-serif", fontSize: 12, color: "rgba(200,170,255,0.55)", lineHeight: 1.7 }}>
+                💡 Başka bir siteden kopyaladığın <strong style={{ color: "rgba(200,170,255,0.85)" }}>doğru şarkı sözlerini</strong> aşağıya yapıştır.
+                Program Whisper'ın bulduğu <strong style={{ color: "#4eff99" }}>ritim zamanlamasını</strong> bu sözlere uygular — hem kelimeler doğru hem tempo korunur.
+              </div>
+              <div style={{ padding: "8px 16px" }}>
+                <textarea
+                  value={correctLyrics}
+                  onChange={(e) => setCorrectLyrics(e.target.value)}
+                  spellCheck={false}
+                  placeholder={"Buraya başka siteden kopyaladığın DOĞRU şarkı sözlerini yapıştır.\nÖrn:\nBizim olsun bu gece\nSenin arzun benim yazgım\n...\n\nProgram Whisper zamanlaması ile karşılaştırıp hizalar."}
+                  style={textareaStyle(180)}
+                />
+              </div>
+              <PanelFooter>
+                <PrimaryBtn
+                  onClick={handleAlign}
+                  disabled={!correctLyrics.trim() || !apiKey.trim() || alignStage === "aligning"}
+                >
+                  {alignStage === "aligning" ? "⏳ Hizalanıyor…" : alignStage === "done" ? "✓ Hizalandı" : "🔀 Hizala — Doğru Kelime + Doğru Ritim"}
+                </PrimaryBtn>
+                {alignStage === "error" && <ErrorBar msg={lyricsError} />}
+              </PanelFooter>
+            </Panel>
+          )}
 
           {/* Formatted + Annotated */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 16 }}>

@@ -694,8 +694,8 @@ export default function App() {
             />
             <div style={{ padding: "10px 16px 6px", fontFamily: "'Outfit',sans-serif", fontSize: 12.5, color: "rgba(200,170,255,0.65)", lineHeight: 1.8 }}>
               🎯 <strong style={{ color: "rgba(200,170,255,0.9)" }}>Nasıl çalışır?</strong> 5 katman birden uygular:
-              perde kayması + tempo kayması + EQ değişimi + hafif satürasyon + oda reverbı.
-              Her katman tek başına yakalanabilir — hepsi birden parmak izini tamamen kırar.
+              <strong style={{ color: "#4eff99" }}>Gerçek pitch shift</strong> (tempo DEĞİŞMEZ) + EQ + satürasyon + reverb.
+              Suno sadece perde biraz farklı olan aynı müziği duyar — tanıyamaz.
             </div>
             <div style={{ padding: "8px 16px 14px", display: "flex", gap: 8, flexWrap: "wrap" }}>
               {(["mild", "medium", "strong"] as BypassStrength[]).map((s) => (
@@ -743,10 +743,10 @@ export default function App() {
                 {bypassStage === "idle" && (
                   <div style={{ padding: "12px 14px", background: "rgba(78,255,153,0.05)", border: "1px solid rgba(78,255,153,0.12)", borderRadius: 8 }}>
                     {[
-                      ["Perde kayması", `+${PROFILES[bypassStrength].pitchCents} cent`],
-                      ["Reverb", `%${Math.round(PROFILES[bypassStrength].reverbWet * 100)} ıslak`],
-                      ["Satürasyon", bypassStrength === "mild" ? "Çok hafif" : bypassStrength === "medium" ? "Hafif" : "Orta"],
-                      ["Teknikler", "5 katman birden"],
+                      ["Perde", `+${PROFILES[bypassStrength].semitones} yarım ton`],
+                      ["Tempo", "Değişmez ✓"],
+                      ["Müzik kalitesi", "PCM WAV, sıfır kayıp"],
+                      ["Teknikler", "OLA + EQ + Sat. + Reverb"],
                     ].map(([k, val]) => (
                       <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                         <span style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: "rgba(200,170,255,0.5)" }}>{k}</span>
